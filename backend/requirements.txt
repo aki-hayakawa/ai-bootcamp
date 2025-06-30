@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+httpx
+python-jose
+minio
+confluent-kafka
+asyncpg
+sqlalchemy
+databases
+python-multipart
+redis
+openai==0.28
+psycopg2-binary
