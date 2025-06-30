@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 httpx
-python-jose
+python-jose[cryptography]
 minio
 confluent-kafka
 asyncpg
@@ -13,3 +13,4 @@ openai==0.28
 psycopg2-binary
 google-genai>=0.1.0
 python-dotenv>=1.0.0
+

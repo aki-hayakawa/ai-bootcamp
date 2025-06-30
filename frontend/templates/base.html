@@ -29,9 +29,24 @@
     <div id="sidebar">
         <h4>AI Bootcamp</h4>
 
-        {% if session.username %}
-          <p class="text-muted small mb-2">👤 {{ session.username }}</p>
+        {% if user %}
+          <p>👤 {{ user.first_name }} {{ user.last_name }}</p>
+          <p class="small text-muted">{{ user.email }}</p>
+
+          {% if user.roles %}
+            <ul class="list-unstyled">
+              {% if user.roles %}
+                <p class="fw-bold mb-1">Roles:</p>
+                <ul class="list-unstyled mb-3">
+                  {% for role in user.roles %}
+                    <li><span class="badge bg-secondary text-light">{{ role }}</span></li>
+                  {% endfor %}
+                </ul>
+              {% endif %}
+            </ul>
+          {% endif %}
         {% endif %}
+
 
         <hr>
 
@@ -44,6 +59,7 @@
             <a class="nav-link text-danger" href="/logout">Logout</a>
         </nav>
     </div>
+
 
     <div id="main">
         {% block content %}{% endblock %}

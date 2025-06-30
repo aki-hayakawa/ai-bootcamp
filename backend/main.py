@@ -7,94 +7,103 @@ from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Request
 from fastapi.security import OAuth2PasswordBearer
 import httpx
 import redis
-from confluent_kafka import Producer, Consumer, KafkaException
-from jose import JWTError
+from jose import JWTError, jwt
+from confluent_kafka import Producer
 from minio import Minio
+from sqlalchemy import insert, create_engine
+from databases import Database
+from dotenv import load_dotenv
 
 # Gemini client
 from google import genai
 from google.genai import types
 
-# Database & metadata from your database.py
-from sqlalchemy import insert, create_engine
-from databases import Database
+# Your database metadata
 from database import llm_logs, user_logs, metadata, DATABASE_URL, database
 
-from dotenv import load_dotenv
-import os
-
+# ─── Load .env ─────────────────────────────────────────────────────────────────
 load_dotenv()
 
+# ─── FastAPI app ───────────────────────────────────────────────────────────────
 app = FastAPI()
 
-# --- Environment-based configuration ---
-KEYCLOAK_URL = os.getenv(
-    "KEYCLOAK_URL", "http://keycloak:8080/realms/ai-bootcamp"
-)
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
-MINIO_URL = os.getenv("MINIO_URL", "minio:9000")
-MINIO_ACCESS = os.getenv("MINIO_ROOT_USER", "minio")
-MINIO_SECRET = os.getenv("MINIO_ROOT_PASSWORD", "minio123")
-MINIO_SECURE = os.getenv("MINIO_SECURE", "False").lower() in ("true", "1", "yes")
-MINIO_BUCKET = os.getenv("MINIO_BUCKET", "uploads")
+# ─── Environment configuration ─────────────────────────────────────────────────
+KEYCLOAK_URL             = os.getenv("KEYCLOAK_URL")
+CLIENT_ID                = os.getenv("KEYCLOAK_CLIENT_ID")
+CLIENT_SECRET            = os.getenv("KEYCLOAK_CLIENT_SECRET")
+OAUTH2_TOKEN_URL         = f"{KEYCLOAK_URL}/protocol/openid-connect/token"
+OAUTH2_USERINFO_URL      = f"{KEYCLOAK_URL}/protocol/openid-connect/userinfo"
 
-# --- Clients initialization ---
-# Redis
+REDIS_URL                = os.getenv("REDIS_URL", "redis://redis:6379")
+KAFKA_BOOTSTRAP_SERVERS  = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+GEMINI_API_KEY           = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL             = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
+
+MINIO_URL                = os.getenv("MINIO_URL", "minio:9000")
+MINIO_ACCESS             = os.getenv("MINIO_ROOT_USER", "minio")
+MINIO_SECRET             = os.getenv("MINIO_ROOT_PASSWORD", "minio123")
+MINIO_SECURE             = os.getenv("MINIO_SECURE", "False").lower() in ("true","1","yes")
+MINIO_BUCKET             = os.getenv("MINIO_BUCKET", "uploads")
+
+# ─── Clients initialization ───────────────────────────────────────────────────
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+producer     = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS})
 
-# Kafka
-producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS})
-consumer_config = {
-    "bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS,
-    "group.id": "fastapi-group",
-    "auto.offset.reset": "earliest",
-}
-
-# Gemini
 if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY environment variable is required")
+    raise RuntimeError("GEMINI_API_KEY is required")
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Keycloak OAuth2
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl=OAUTH2_TOKEN_URL)
 
-# MinIO (initialized on startup)
 minio_client: Minio
+jwks = None  # will hold Keycloak’s signing keys
 
-# --- Startup / Shutdown events ---
+# ─── Startup / Shutdown ────────────────────────────────────────────────────────
 @app.on_event("startup")
 async def startup():
-    global minio_client
-    # Connect to the database
+    global jwks, minio_client
+    # Database
     await database.connect()
-    # Ensure tables exist
     engine = create_engine(DATABASE_URL)
     metadata.create_all(engine)
-    # Initialize MinIO client
+
+    # Fetch Keycloak JWKS for token validation
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"{KEYCLOAK_URL}/protocol/openid-connect/certs")
+        resp.raise_for_status()
+        jwks = resp.json()
+
+    # MinIO
     minio_client = Minio(
-        MINIO_URL,
-        access_key=MINIO_ACCESS,
-        secret_key=MINIO_SECRET,
-        secure=MINIO_SECURE,
+        MINIO_URL, access_key=MINIO_ACCESS,
+        secret_key=MINIO_SECRET, secure=MINIO_SECURE
     )
+    if not minio_client.bucket_exists(MINIO_BUCKET):
+        minio_client.make_bucket(MINIO_BUCKET)
 
 @app.on_event("shutdown")
 async def shutdown():
     await database.disconnect()
 
-# --- Helper for Keycloak token verification ---
+# ─── Token verification ────────────────────────────────────────────────────────
 async def verify_token(token: str = Depends(oauth2_scheme)):
     try:
-        headers = {"Authorization": f"Bearer {token}"}
-        async with httpx.AsyncClient() as client:
-            res = await client.get(f"{KEYCLOAK_URL}/protocol/openid-connect/userinfo", headers=headers)
-        if res.status_code != 200:
-            raise HTTPException(status_code=401, detail="Invalid token")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Token error")
+        # 1) Find the key by `kid`
+        unhdr = jwt.get_unverified_header(token)
+        key = next(k for k in jwks["keys"] if k["kid"] == unhdr["kid"])
+        pub = jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(key))
+
+        # 2) Decode & verify
+        payload = jwt.decode(
+            token,
+            pub,
+            audience=CLIENT_ID,
+            issuer=f"{KEYCLOAK_URL}/",
+            algorithms=[unhdr["alg"]],
+        )
+        return payload
+    except (StopIteration, JWTError) as e:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 # --- Routes ---
 
