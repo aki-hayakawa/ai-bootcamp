@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Ask LLM{% endblock %}
+{% block content %}
+  <h2>Ask the LLM</h2>
+
+  <div class="mb-3">
+    <label for="prompt" class="form-label">Prompt</label>
+    <textarea id="prompt" class="form-control" rows="4"></textarea>
+  </div>
+  <button id="submitBtn" class="btn btn-primary">Submit</button>
+
+  <hr>
+  <div id="response-container" style="display: none;">
+    <h4>Response (<span id="source"></span>)</h4>
+    <pre class="bg-light p-3 border rounded" id="responseText"></pre>
+  </div>
+
+  <script>
+    document.getElementById("submitBtn").addEventListener("click", async () => {
+      const prompt = document.getElementById("prompt").value.trim();
+      if (!prompt) {
+        alert("Please enter a prompt.");
+        return;
+      }
+
+      try {
+        const res = await fetch("/ask-llm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt: prompt })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          alert(data.detail || "Error");
+          return;
+        }
+
+        document.getElementById("responseText").innerText = data.response;
+        document.getElementById("source").innerText = data.source;
+        document.getElementById("response-container").style.display = "block";
+      } catch (e) {
+        alert("Error: " + e.message);
+      }
+    });
+  </script>
+{% endblock %}
