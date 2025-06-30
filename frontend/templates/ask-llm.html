@@ -1,68 +1,108 @@
 {% extends "base.html" %}
 {% block title %}Ask LLM{% endblock %}
+
 {% block content %}
   <h2>Ask the LLM</h2>
 
-  <div class="mb-3">
-    <label for="prompt" class="form-label">Prompt</label>
-    <textarea id="prompt" class="form-control" rows="4"></textarea>
-  </div>
-  <button id="submitBtn" class="btn btn-primary">Submit</button>
+  <form id="llmForm" class="mb-4">
+    <div class="mb-3">
+      <label for="prompt" class="form-label">Prompt</label>
+      <textarea id="prompt" name="prompt" class="form-control" rows="4" required></textarea>
+    </div>
+    <button type="submit" class="btn btn-primary" id="submitBtn">
+      Submit
+      <span 
+        id="spinner" 
+        class="spinner-border spinner-border-sm ms-2" 
+        role="status" 
+        aria-hidden="true" 
+        style="display:none;"
+      ></span>
+    </button>
+  </form>
 
   <hr>
-  <div id="response-container" style="display: none;">
+
+  <div 
+    id="response-container" 
+    class="fade" 
+    style="display: none; opacity: 0;"
+  >
     <h4>Response (<span id="source"></span>)</h4>
     <pre class="bg-light p-3 border rounded" id="responseText"></pre>
   </div>
 
-<script>
-  window.addEventListener('DOMContentLoaded', () => {
-  document.getElementById("submitBtn").addEventListener("click", async (event) => {
-    event.preventDefault();
-    console.log("Button clicked");
+  <script>
+    const token = "{{ session.access_token }}";
+    const form = document.getElementById("llmForm");
+    const btn  = document.getElementById("submitBtn");
+    const spinner = document.getElementById("spinner");
+    const respCont = document.getElementById("response-container");
+    const respText = document.getElementById("responseText");
+    const srcSpan  = document.getElementById("source");
 
-    const prompt = document.getElementById("prompt").value.trim();
-    if (!prompt) {
-      alert("Please enter a prompt.");
-      return;
-    }
+    form.addEventListener("submit", async function(e) {
+      e.preventDefault();
 
-    try {
-      const res = await fetch("/ask-llm", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: prompt })
-      });
+      // grab & validate
+      const prompt = (new FormData(form).get("prompt")||"").trim();
+      if (!prompt) {
+        alert("Please enter a prompt.");
+        return;
+      }
 
-      let data;
+      // prepare UI
+      btn.disabled = true;
+      spinner.style.display = "inline-block";
+      // hide previous response
+      respCont.classList.remove("show");
+      respCont.style.display = "none";
+
       try {
-        data = await res.json();
-      } catch (jsonError) {
-        alert("Server did not return JSON.");
-        return;
-      }
+        // fetch
+        const res = await fetch("/ask-llm", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Authorization": `Bearer ${token}`
+          },
+          body: JSON.stringify({ prompt })
+        });
 
-      if (!res.ok) {
-        alert(data.detail || "Error");
-        return;
-      }
+        const data = await res.json().catch(()=>null);
+        if (!res.ok) {
+          throw new Error(data?.detail || `HTTP ${res.status}`);
+        }
 
-      // ✅ Check if response and source exist
-      if (data.response && data.source) {
-        document.getElementById("responseText").innerText = data.response;
-        document.getElementById("source").innerText = data.source;
-        document.getElementById("response-container").style.display = "block";
-      } else {
-        alert("Unexpected response from server.");
-        console.log(data); // See what the server actually returned
-      }
+        // fill response
+        respText.innerText = data.response;
+        srcSpan.innerText  = data.source;
 
-    } catch (e) {
-      alert("Error: " + e.message);
+        // fade-in
+        respCont.style.display = "block";
+        // force reflow so transition triggers
+        void respCont.offsetWidth;
+        respCont.classList.add("show");
+
+      } catch (err) {
+        alert("Error: " + err.message);
+        console.error(err);
+      } finally {
+        // restore button
+        btn.disabled = false;
+        spinner.style.display = "none";
+      }
+    });
+  </script>
+
+  <style>
+    /* bootstrap’s .fade + .show gives us a simple fade transition */
+    .fade {
+      transition: opacity 0.3s ease-in-out;
     }
-  });
-});
-
-</script>
-
+    .fade.show {
+      opacity: 1 !important;
+    }
+  </style>
 {% endblock %}

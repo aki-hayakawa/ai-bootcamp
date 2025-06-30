@@ -22,15 +22,14 @@ services:
       dockerfile: Dockerfile.dev
     container_name: frontend
     restart: always
-    environment:
-      - BACKEND_URL=http://backend:8000
-    env_file:
-      -  .env 
     depends_on:
       - backend
+    env_file:
+      - .env
+    environment:
+      - BACKEND_URL=http://backend:8000
     ports:
       - "5000:5000"
-
     volumes:
       - ./frontend:/app
 
@@ -78,22 +77,57 @@ services:
     depends_on:
       - zookeeper
     environment:
-      KAFKA_BROKER_ID: 1
+      # Required K → ZK link
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_LISTENERS: PLAINTEXT://kafka:9092
+
+      # Listen on every interface inside container:
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+
+      # Advertise to other containers as "kafka:9092":
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+
+      # Keep internal topics at RF=1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+
+      # Auto-create your `llm-events` topic for you
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+      # Map listener name → protocol
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+    healthcheck:
+      test: ["CMD-SHELL", "echo > /dev/tcp/0.0.0.0/9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  analytics:
+    build: ./analytics
+    container_name: analytics
+    restart: always
+    depends_on:
+      - zookeeper
+      - kafka
+      - redis
+    env_file:
+      - .env
 
   nginx:
     image: nginx:alpine
     container_name: nginx
     restart: always
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
-    ports:
-      - "443:443"
     depends_on:
       - backend
       - frontend
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    ports:
+      - "80:80"
+      - "443:443"
 
   minio:
     image: minio/minio
@@ -113,13 +147,13 @@ services:
     image: dpage/pgadmin4
     container_name: pgadmin
     restart: always
+    depends_on:
+      - postgres
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@admin.com
       PGADMIN_DEFAULT_PASSWORD: admin
     ports:
       - "8082:80"
-    depends_on:
-      - postgres
 
 volumes:
   pgdata:

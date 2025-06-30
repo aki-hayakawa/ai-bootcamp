@@ -3,6 +3,7 @@ import json
 import datetime
 from io import BytesIO
 
+
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Request
 from fastapi.security import OAuth2PasswordBearer
 import httpx
@@ -13,6 +14,9 @@ from minio import Minio
 from sqlalchemy import insert, create_engine
 from databases import Database
 from dotenv import load_dotenv
+
+from sqlalchemy.exc import OperationalError
+import time
 
 # Gemini client
 from google import genai
@@ -47,7 +51,10 @@ MINIO_BUCKET             = os.getenv("MINIO_BUCKET", "uploads")
 
 # ─── Clients initialization ───────────────────────────────────────────────────
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-producer     = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS})
+
+
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS})
 
 if not GEMINI_API_KEY:
     raise RuntimeError("GEMINI_API_KEY is required")
@@ -58,29 +65,67 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl=OAUTH2_TOKEN_URL)
 minio_client: Minio
 jwks = None  # will hold Keycloak’s signing keys
 
+
+
+# after your other imports & load_dotenv…
+redis_client = redis.from_url(os.getenv("REDIS_URL"), decode_responses=True)
+
+@app.get("/analytics/summary")
+async def analytics_summary():
+    total   = int(redis_client.get("analytics:llm:total") or 0)
+    by_src  = redis_client.hgetall("analytics:llm:by_source")
+    latency = redis_client.hgetall("analytics:llm:latency_sum")
+    sum_    = float(latency.get("sum",0))
+    cnt     = int(latency.get("count",0))
+    avg_lat = sum_/cnt if cnt>0 else None
+
+    return {"total_calls": total, "by_source": by_src, "avg_latency": avg_lat}
+
+@app.get("/analytics/top-prompts")
+async def analytics_top_prompts(limit: int = 10):
+    # Returns top N prompts by usage count
+    raw = redis_client.zrevrange("analytics:llm:top_prompts", 0, limit-1, withscores=True)
+    return [{"prompt": p, "count": int(s)} for p,s in raw]
+
 # ─── Startup / Shutdown ────────────────────────────────────────────────────────
 @app.on_event("startup")
 async def startup():
     global jwks, minio_client
-    # Database
+
+    # 1) Connect the databases.Client
     await database.connect()
     engine = create_engine(DATABASE_URL)
-    metadata.create_all(engine)
 
-    # Fetch Keycloak JWKS for token validation
+    # 2) Wait for Postgres to accept connections
+    for i in range(10):
+        try:
+            conn = engine.connect()
+            conn.close()
+            break
+        except OperationalError:
+            print(f"⏳ Waiting for Postgres ({i+1}/10)…", flush=True)
+            time.sleep(1)
+
+    # 3) Create tables
+    try:
+        metadata.create_all(engine)
+        print("✅ Tables created (or already existed)", flush=True)
+    except Exception as e:
+        print("❌ metadata.create_all() failed:", e, flush=True)
+
+    # 4) Fetch Keycloak JWKS …
     async with httpx.AsyncClient() as client:
         resp = await client.get(f"{KEYCLOAK_URL}/protocol/openid-connect/certs")
         resp.raise_for_status()
         jwks = resp.json()
 
-    # MinIO
+    # 5) Initialize MinIO …
     minio_client = Minio(
         MINIO_URL, access_key=MINIO_ACCESS,
         secret_key=MINIO_SECRET, secure=MINIO_SECURE
     )
     if not minio_client.bucket_exists(MINIO_BUCKET):
         minio_client.make_bucket(MINIO_BUCKET)
-
 @app.on_event("shutdown")
 async def shutdown():
     await database.disconnect()
@@ -117,11 +162,17 @@ async def ask_llm(request: Request):
     # 1) Check cache
     cached = redis_client.get(prompt)
     if cached:
-        source, reply = "cache", cached
+        source, reply, duration = "cache", cached, 0.0
     else:
-        # 2) Stream from Gemini
+        # 2) Stream from Gemini and measure duration
         source, reply = "gemini", ""
-        contents = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
+        start = time.time()
+        contents = [
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=prompt)]
+            )
+        ]
         config = types.GenerateContentConfig(
             thinking_config=types.ThinkingConfig(thinking_budget=-1),
             response_mime_type="text/plain",
@@ -133,6 +184,9 @@ async def ask_llm(request: Request):
                 reply += chunk.text
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Gemini Error: {e}")
+        duration = time.time() - start
+
+        # cache the full reply
         redis_client.set(prompt, reply)
 
     # 3) Log to PostgreSQL
@@ -145,18 +199,22 @@ async def ask_llm(request: Request):
         )
     )
 
-    # 4) Emit Kafka event
+    # 4) Emit Kafka event (with duration)
+    # assign an epoch‐seconds timestamp
+    ts = time.time()
     event = {
-        "prompt": prompt,
-        "response": reply,
-        "source": source,
-        "timestamp": datetime.datetime.utcnow().isoformat(),
+        "prompt":    prompt,
+        "response":  reply,
+        "source":    source,
+        "duration":  duration,  # seconds
+        "timestamp": ts,
     }
     try:
-        producer.produce("llm-events", value=json.dumps(event).encode("utf-8"))
+        producer.produce("llm-events", json.dumps(event).encode("utf-8"))
         producer.flush()
+        print(f"[Kafka] Produced to llm-events: {event}", flush=True)
     except Exception as e:
-        print(f"[Kafka Error] Failed to send event: {e}")
+        print(f"[Kafka Error] Failed to send event: {e}", flush=True)
 
     return {"source": source, "response": reply}
 

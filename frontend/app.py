@@ -132,15 +132,32 @@ def index():
 @login_required
 def ask_llm():
     token = session["access_token"]
+
     if request.method == "POST":
-        prompt = request.form.get("prompt", "")
-        res = requests.post(
-            f"{BACKEND_URL}/ask-llm",
-            json={"prompt": prompt},
-            headers={"Authorization": f"Bearer {token}"}
-        )
-        return (res.json(), res.status_code)
+        # 1) Parse the JSON body
+        data = request.get_json()
+        if not data:
+            return {"detail": "Invalid JSON body"}, 400
+
+        # 2) Extract prompt
+        prompt = data.get("prompt")
+        if not prompt:
+            return {"detail": "Prompt is required"}, 400
+
+        # 3) Proxy to FastAPI (with auth header)
+        try:
+            res = requests.post(
+                f"{BACKEND_URL}/ask-llm",
+                json={"prompt": prompt},
+                headers={"Authorization": f"Bearer {token}"}
+            )
+            return res.json(), res.status_code
+        except Exception as e:
+            return {"detail": f"Error calling backend: {e}"}, 500
+
+    # For GET, just render the page
     return render_template("ask-llm.html")
+
 
 @app.route("/history")
 @login_required
