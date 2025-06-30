@@ -12,9 +12,16 @@ services:
       - redis
       - kafka
     environment:
-      - DATABASE_URL=postgresql://user:pass@postgres:5432/dbname
-      - REDIS_URL=redis://redis:6379
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - KEYCLOAK_URL=${KEYCLOAK_URL}
+      - MINIO_URL=${MINIO_URL}
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - MINIO_SECURE=${MINIO_SECURE}
+      - MINIO_BUCKET=${MINIO_BUCKET}
     volumes:
       - ./backend:/app
 

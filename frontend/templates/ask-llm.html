@@ -15,34 +15,54 @@
     <pre class="bg-light p-3 border rounded" id="responseText"></pre>
   </div>
 
-  <script>
-    document.getElementById("submitBtn").addEventListener("click", async () => {
-      const prompt = document.getElementById("prompt").value.trim();
-      if (!prompt) {
-        alert("Please enter a prompt.");
+<script>
+  window.addEventListener('DOMContentLoaded', () => {
+  document.getElementById("submitBtn").addEventListener("click", async (event) => {
+    event.preventDefault();
+    console.log("Button clicked");
+
+    const prompt = document.getElementById("prompt").value.trim();
+    if (!prompt) {
+      alert("Please enter a prompt.");
+      return;
+    }
+
+    try {
+      const res = await fetch("/ask-llm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: prompt })
+      });
+
+      let data;
+      try {
+        data = await res.json();
+      } catch (jsonError) {
+        alert("Server did not return JSON.");
         return;
       }
 
-      try {
-        const res = await fetch("/ask-llm", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt: prompt })
-        });
+      if (!res.ok) {
+        alert(data.detail || "Error");
+        return;
+      }
 
-        const data = await res.json();
-
-        if (!res.ok) {
-          alert(data.detail || "Error");
-          return;
-        }
-
+      // ✅ Check if response and source exist
+      if (data.response && data.source) {
         document.getElementById("responseText").innerText = data.response;
         document.getElementById("source").innerText = data.source;
         document.getElementById("response-container").style.display = "block";
-      } catch (e) {
-        alert("Error: " + e.message);
+      } else {
+        alert("Unexpected response from server.");
+        console.log(data); // See what the server actually returned
       }
-    });
-  </script>
+
+    } catch (e) {
+      alert("Error: " + e.message);
+    }
+  });
+});
+
+</script>
+
 {% endblock %}

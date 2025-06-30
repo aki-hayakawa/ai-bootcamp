@@ -15,9 +15,14 @@ def index():
 
 @app.route("/ask-llm", methods=["GET", "POST"])
 def ask_llm():
+
     if request.method == "POST":
+        
         data = request.get_json()
         prompt = data.get("prompt")
+        
+        print(f"Prompt: {prompt}",flush=True)
+        
         if not prompt:
             return {"detail": "Prompt is required"}, 400
 
@@ -27,7 +32,7 @@ def ask_llm():
         except Exception as e:
             return {"detail": f"Error calling backend: {str(e)}"}, 500
 
-    return render_template("ask_llm.html")
+    return render_template("ask-llm.html")
 
 
 @app.route("/history")

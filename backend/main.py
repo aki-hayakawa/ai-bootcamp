@@ -1,108 +1,172 @@
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File,Request
-from fastapi.security import OAuth2PasswordBearer
-
-from jose import JWTError
-import httpx
-import datetime
-import openai
-import redis
-import os
-import redis
 import os
 import json
-
-from minio import Minio
-from database import database, user_logs
-
-from confluent_kafka import Producer, Consumer, KafkaException
-import time
-
+import datetime
 from io import BytesIO
 
-from database import metadata, DATABASE_URL
-from sqlalchemy import create_engine
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Request
+from fastapi.security import OAuth2PasswordBearer
+import httpx
+import redis
+from confluent_kafka import Producer, Consumer, KafkaException
+from jose import JWTError
+from minio import Minio
+
+# Gemini client
+from google import genai
+from google.genai import types
+
+# Database & metadata from your database.py
+from sqlalchemy import insert, create_engine
+from databases import Database
+from database import llm_logs, user_logs, metadata, DATABASE_URL, database
+
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 app = FastAPI()
 
-# OAuth2 setup for Keycloak
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-KEYCLOAK_REALM = "ai-bootcamp"
-KEYCLOAK_URL = "http://keycloak:8080/realms/ai-bootcamp"
+# --- Environment-based configuration ---
+KEYCLOAK_URL = os.getenv(
+    "KEYCLOAK_URL", "http://keycloak:8080/realms/ai-bootcamp"
+)
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
+MINIO_URL = os.getenv("MINIO_URL", "minio:9000")
+MINIO_ACCESS = os.getenv("MINIO_ROOT_USER", "minio")
+MINIO_SECRET = os.getenv("MINIO_ROOT_PASSWORD", "minio123")
+MINIO_SECURE = os.getenv("MINIO_SECURE", "False").lower() in ("true", "1", "yes")
+MINIO_BUCKET = os.getenv("MINIO_BUCKET", "uploads")
 
+# --- Clients initialization ---
+# Redis
+redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-# Set up OpenRouter config
-openai.api_base = "https://openrouter.ai/api/v1"
-openai.api_key = "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" 
-
-# Redis client
-redis_client = redis.Redis(host="redis", port=6379, decode_responses=True)
-
-async def verify_token(token: str = Depends(oauth2_scheme)):
-    try:
-        headers = {"Authorization": f"Bearer {token}"}
-        async with httpx.AsyncClient() as client:
-            res = await client.get(f"{KEYCLOAK_URL}/protocol/openid-connect/userinfo", headers=headers)
-            if res.status_code != 200:
-                raise HTTPException(status_code=401, detail="Invalid token")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Token error")
-
-# Globals for Kafka and MinIO
-producer = Producer({'bootstrap.servers': 'kafka:9092'})
+# Kafka
+producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS})
 consumer_config = {
-    'bootstrap.servers': 'kafka:9092',
-    'group.id': 'fastapi-group',
-    'auto.offset.reset': 'earliest'
+    "bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS,
+    "group.id": "fastapi-group",
+    "auto.offset.reset": "earliest",
 }
 
-minio_client = None
-BUCKET_NAME = "uploads"
+# Gemini
+if not GEMINI_API_KEY:
+    raise RuntimeError("GEMINI_API_KEY environment variable is required")
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
+# Keycloak OAuth2
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# MinIO (initialized on startup)
+minio_client: Minio
+
+# --- Startup / Shutdown events ---
 @app.on_event("startup")
 async def startup():
     global minio_client
+    # Connect to the database
     await database.connect()
-
-    # Create tables if not exist
+    # Ensure tables exist
     engine = create_engine(DATABASE_URL)
     metadata.create_all(engine)
-
-    # Initialize MinIO
+    # Initialize MinIO client
     minio_client = Minio(
-        "minio:9000",
-        access_key="minio",
-        secret_key="minio123",
-        secure=False
+        MINIO_URL,
+        access_key=MINIO_ACCESS,
+        secret_key=MINIO_SECRET,
+        secure=MINIO_SECURE,
     )
 
 @app.on_event("shutdown")
 async def shutdown():
     await database.disconnect()
 
-# -------------------
-# Secure Test Route
-# -------------------
+# --- Helper for Keycloak token verification ---
+async def verify_token(token: str = Depends(oauth2_scheme)):
+    try:
+        headers = {"Authorization": f"Bearer {token}"}
+        async with httpx.AsyncClient() as client:
+            res = await client.get(f"{KEYCLOAK_URL}/protocol/openid-connect/userinfo", headers=headers)
+        if res.status_code != 200:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Token error")
+
+# --- Routes ---
+
+@app.post("/ask-llm")
+async def ask_llm(request: Request):
+    data = await request.json()
+    prompt = data.get("prompt")
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt is required")
+
+    # 1) Check cache
+    cached = redis_client.get(prompt)
+    if cached:
+        source, reply = "cache", cached
+    else:
+        # 2) Stream from Gemini
+        source, reply = "gemini", ""
+        contents = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
+        config = types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_budget=-1),
+            response_mime_type="text/plain",
+        )
+        try:
+            for chunk in gemini_client.models.generate_content_stream(
+                model=GEMINI_MODEL, contents=contents, config=config
+            ):
+                reply += chunk.text
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Gemini Error: {e}")
+        redis_client.set(prompt, reply)
+
+    # 3) Log to PostgreSQL
+    await database.execute(
+        insert(llm_logs).values(
+            prompt=prompt,
+            response=reply,
+            source=source,
+            created_at=datetime.datetime.utcnow(),
+        )
+    )
+
+    # 4) Emit Kafka event
+    event = {
+        "prompt": prompt,
+        "response": reply,
+        "source": source,
+        "timestamp": datetime.datetime.utcnow().isoformat(),
+    }
+    try:
+        producer.produce("llm-events", value=json.dumps(event).encode("utf-8"))
+        producer.flush()
+    except Exception as e:
+        print(f"[Kafka Error] Failed to send event: {e}")
+
+    return {"source": source, "response": reply}
+
 @app.get("/secure-data")
 async def secure_data(token: str = Depends(verify_token)):
     return {"message": "Protected route access granted"}
 
-# -------------------
-# PostgreSQL Logging
-# -------------------
 @app.post("/log-action")
 async def log_action(username: str, action: str):
-    query = user_logs.insert().values(username=username, action=action, timestamp=datetime.datetime.utcnow())
-    await database.execute(query)
+    await database.execute(
+        insert(user_logs).values(username=username, action=action, timestamp=datetime.datetime.utcnow())
+    )
     return {"status": "logged"}
 
 @app.get("/logs")
 async def get_logs():
-    query = user_logs.select().limit(10)
-    return await database.fetch_all(query)
+    rows = await database.fetch_all(user_logs.select().limit(10))
+    return rows
 
-# -------------------
-# Kafka Messaging
-# -------------------
 @app.post("/send-message")
 def send_message(message: str):
     try:
@@ -127,20 +191,15 @@ async def consume_messages():
             messages.append(msg.value().decode("utf-8"))
     finally:
         consumer.close()
-
     return {"messages": messages}
 
-# -------------------
-# MinIO File Upload
-# -------------------
 @app.post("/upload-file")
 async def upload_file(file: UploadFile = File(...)):
     contents = await file.read()
-    
     minio_client.put_object(
-        BUCKET_NAME,
+        MINIO_BUCKET,
         file.filename,
-        data=BytesIO(contents),  # ✅ FIX: stream not raw bytes
+        data=BytesIO(contents),
         length=len(contents),
         content_type=file.content_type,
     )
@@ -148,88 +207,11 @@ async def upload_file(file: UploadFile = File(...)):
 
 @app.get("/list-files")
 def list_files():
-    global minio_client
-    objects = minio_client.list_objects(BUCKET_NAME)
-    return [obj.object_name for obj in objects]
-
-
-
-
-from database import llm_logs
-
-@app.post("/ask-llm")
-async def ask_llm(request: Request):
-    data = await request.json()
-    prompt = data.get("prompt")
-
-    if not prompt:
-        raise HTTPException(status_code=400, detail="Prompt is required")
-
-    cached = redis_client.get(prompt)
-    source = "cache"
-    reply = cached
-
-    if not cached:
-        try:
-            response = openai.ChatCompletion.create(
-                model="openai/gpt-4o-mini",  # or any supported model
-                messages=[{"role": "user", "content": prompt}]
-            )
-            reply = response['choices'][0]['message']['content']
-            redis_client.set(prompt, reply)
-            source = "openrouter"
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"OpenRouter Error: {str(e)}")
-
-    # Log to PostgreSQL
-    await database.execute(
-        llm_logs.insert().values(
-            prompt=prompt,
-            response=reply,
-            source=source
-        )
-    )
-
-    # Send Kafka event
-    event = {
-        "prompt": prompt,
-        "response": reply,
-        "source": source,
-        "timestamp": datetime.datetime.utcnow().isoformat()
-    }
-
-    try:
-        producer.produce("llm-events", value=json.dumps(event).encode("utf-8"))
-        producer.flush()
-    except Exception as e:
-        print(f"[Kafka Error] Failed to send event: {e}")
-
-    return {"source": source, "response": reply}
-
-from database import llm_logs
+    return [obj.object_name for obj in minio_client.list_objects(MINIO_BUCKET)]
 
 @app.get("/llm-history")
 async def get_llm_history():
-    query = llm_logs.select().order_by(llm_logs.c.created_at.desc()).limit(50)
-    rows = await database.fetch_all(query)
-    return [dict(row) for row in rows]
-
-@app.post("/upload-file")
-async def upload_file(file: UploadFile = File(...)):
-    contents = await file.read()
-
-
-    minio_client.put_object(
-        BUCKET_NAME,
-        file.filename,
-        data=BytesIO(contents),  # <--- THIS is the fix
-        length=len(contents),
-        content_type=file.content_type,
+    rows = await database.fetch_all(
+        llm_logs.select().order_by(llm_logs.c.created_at.desc()).limit(50)
     )
-
-    return {"filename": file.filename, "status": "uploaded"}
-
-@app.get("/list-files")
-def list_files():
-    objects = minio_client.list_objects(BUCKET_NAME)
-    return [obj.object_name for obj in objects]
+    return [dict(row) for row in rows]
