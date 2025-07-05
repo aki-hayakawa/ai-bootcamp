@@ -3,7 +3,7 @@ uvicorn
 httpx
 python-jose[cryptography]
 minio
-confluent-kafka
+pika
 asyncpg
 sqlalchemy
 databases

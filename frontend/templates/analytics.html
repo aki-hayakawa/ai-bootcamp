@@ -1,0 +1,422 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <h1>📊 Dashboard</h1>
+            <p class="text-muted">Real-time analytics for AI Bootcamp usage and file management</p>
+        </div>
+    </div>
+
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <div class="card bg-primary text-white">
+                <div class="card-body">
+                    <h5 class="card-title">Total LLM Calls</h5>
+                    <h2 id="total-calls" class="card-text">-</h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-success text-white">
+                <div class="card-body">
+                    <h5 class="card-title">Average Latency</h5>
+                    <h2 id="avg-latency" class="card-text">-</h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-info text-white">
+                <div class="card-body">
+                    <h5 class="card-title">Files Uploaded</h5>
+                    <h2 id="total-files" class="card-text">-</h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-warning text-white">
+                <div class="card-body">
+                    <h5 class="card-title">Storage Used</h5>
+                    <h2 id="total-storage" class="card-text">-</h2>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mb-4">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title">📈 LLM Usage by Source</h5>
+                </div>
+                <div class="card-body">
+                    <canvas id="sourceChart" width="400" height="200"></canvas>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title">📁 Files by Type</h5>
+                </div>
+                <div class="card-body">
+                    <canvas id="fileTypeChart" width="400" height="200"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- File AI Analytics Row -->
+    <div class="row mb-4">
+        <div class="col-md-4">
+            <div class="card bg-info text-white">
+                <div class="card-body">
+                    <h5 class="card-title">🤖 File AI Requests</h5>
+                    <h2 id="file-ai-requests" class="card-text">-</h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title">🧠 AI Models Used</h5>
+                </div>
+                <div class="card-body">
+                    <canvas id="aiModelChart" width="400" height="200"></canvas>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title">📄 File Types Analyzed</h5>
+                </div>
+                <div class="card-body">
+                    <canvas id="fileAiTypeChart" width="400" height="200"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mb-4">
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title">🔥 Top Prompts</h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>Rank</th>
+                                    <th>Prompt</th>
+                                    <th>Count</th>
+                                </tr>
+                            </thead>
+                            <tbody id="top-prompts">
+                                <tr>
+                                    <td colspan="3" class="text-center">Loading...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title">📂 Most Analyzed Files</h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>Rank</th>
+                                    <th>Filename</th>
+                                    <th>AI Requests</th>
+                                </tr>
+                            </thead>
+                            <tbody id="top-files">
+                                <tr>
+                                    <td colspan="3" class="text-center">Loading...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title">🗑️ Recently Deleted Files</h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>Filename</th>
+                                    <th>Status</th>
+                                    <th>Deleted</th>
+                                </tr>
+                            </thead>
+                            <tbody id="deleted-files">
+                                <tr>
+                                    <td colspan="3" class="text-center">Loading...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+// Initialize charts
+const sourceCtx = document.getElementById('sourceChart').getContext('2d');
+const fileTypeCtx = document.getElementById('fileTypeChart').getContext('2d');
+const aiModelCtx = document.getElementById('aiModelChart').getContext('2d');
+const fileAiTypeCtx = document.getElementById('fileAiTypeChart').getContext('2d');
+
+const sourceChart = new Chart(sourceCtx, {
+    type: 'doughnut',
+    data: {
+        labels: ['Cache', 'Gemini'],
+        datasets: [{
+            data: [0, 0],
+            backgroundColor: ['#36A2EB', '#FF6384']
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                position: 'bottom'
+            }
+        }
+    }
+});
+
+const fileTypeChart = new Chart(fileTypeCtx, {
+    type: 'bar',
+    data: {
+        labels: [],
+        datasets: [{
+            label: 'Files by Type',
+            data: [],
+            backgroundColor: ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40']
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+            y: {
+                beginAtZero: true,
+                title: {
+                    display: true,
+                    text: 'Number of Files'
+                }
+            }
+        }
+    }
+});
+
+const aiModelChart = new Chart(aiModelCtx, {
+    type: 'doughnut',
+    data: {
+        labels: [],
+        datasets: [{
+            data: [],
+            backgroundColor: ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF']
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                position: 'bottom'
+            }
+        }
+    }
+});
+
+const fileAiTypeChart = new Chart(fileAiTypeCtx, {
+    type: 'doughnut',
+    data: {
+        labels: [],
+        datasets: [{
+            data: [],
+            backgroundColor: ['#FF9F40', '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0']
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                position: 'bottom'
+            }
+        }
+    }
+});
+
+// Fetch and update analytics data
+async function fetchAnalytics() {
+    try {
+        // Fetch summary data
+        const summaryResponse = await fetch('/api/analytics/summary');
+        const summaryData = await summaryResponse.json();
+        
+        // Fetch file analytics
+        const filesResponse = await fetch('/api/analytics/files');
+        const filesData = await filesResponse.json();
+        
+        // Fetch file AI analytics
+        const fileAiResponse = await fetch('/api/analytics/file-ai');
+        const fileAiData = await fileAiResponse.json();
+        
+        // Fetch deleted files analytics
+        const deletedFilesResponse = await fetch('/api/analytics/deleted-files');
+        const deletedFilesData = await deletedFilesResponse.json();
+        
+        // Update summary cards
+        document.getElementById('total-calls').textContent = summaryData.total_calls || 0;
+        document.getElementById('avg-latency').textContent = 
+            summaryData.avg_latency ? `${(summaryData.avg_latency * 1000).toFixed(0)}ms` : 'N/A';
+        
+        // Update file metrics
+        document.getElementById('total-files').textContent = filesData.total_files || 0;
+        const totalSize = filesData.total_size || 0;
+        const sizeFormatted = totalSize > 1024 * 1024 ? 
+            `${(totalSize / (1024 * 1024)).toFixed(1)}MB` : 
+            `${(totalSize / 1024).toFixed(1)}KB`;
+        document.getElementById('total-storage').textContent = sizeFormatted;
+        
+        // Update file AI metrics
+        document.getElementById('file-ai-requests').textContent = fileAiData.total_requests || 0;
+        
+        // Update source chart
+        const bySource = summaryData.by_source || {};
+        sourceChart.data.datasets[0].data = [
+            parseInt(bySource.cache || 0),
+            parseInt(bySource.gemini || 0)
+        ];
+        sourceChart.update();
+        
+        // Update file type chart
+        const byType = filesData.by_type || {};
+        const typeLabels = Object.keys(byType);
+        const typeData = Object.values(byType).map(v => parseInt(v));
+        
+        fileTypeChart.data.labels = typeLabels;
+        fileTypeChart.data.datasets[0].data = typeData;
+        fileTypeChart.update();
+        
+        // Update AI model chart
+        const byModel = fileAiData.by_model || {};
+        const modelLabels = Object.keys(byModel);
+        const modelData = Object.values(byModel).map(v => parseInt(v));
+        
+        aiModelChart.data.labels = modelLabels;
+        aiModelChart.data.datasets[0].data = modelData;
+        aiModelChart.update();
+        
+        // Update file AI type chart
+        const byAiType = fileAiData.by_type || {};
+        const aiTypeLabels = Object.keys(byAiType);
+        const aiTypeData = Object.values(byAiType).map(v => parseInt(v));
+        
+        fileAiTypeChart.data.labels = aiTypeLabels;
+        fileAiTypeChart.data.datasets[0].data = aiTypeData;
+        fileAiTypeChart.update();
+        
+        // Fetch top prompts
+        const promptsResponse = await fetch('/api/analytics/top-prompts');
+        const promptsData = await promptsResponse.json();
+        
+        // Update top prompts table
+        const tbody = document.getElementById('top-prompts');
+        tbody.innerHTML = '';
+        
+        if (promptsData.length > 0) {
+            promptsData.forEach((item, index) => {
+                const row = `
+                    <tr>
+                        <td>${index + 1}</td>
+                        <td class="text-truncate" style="max-width: 300px;">${item.prompt}</td>
+                        <td><span class="badge bg-primary">${item.count}</span></td>
+                    </tr>
+                `;
+                tbody.innerHTML += row;
+            });
+        } else {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center">No data available</td></tr>';
+        }
+        
+        // Update top analyzed files table
+        const topFiles = fileAiData.top_files || [];
+        const filesTbody = document.getElementById('top-files');
+        filesTbody.innerHTML = '';
+        
+        if (topFiles.length > 0) {
+            topFiles.forEach((item, index) => {
+                const row = `
+                    <tr>
+                        <td>${index + 1}</td>
+                        <td class="text-truncate" style="max-width: 200px;" title="${item.filename}">${item.filename}</td>
+                        <td><span class="badge bg-info">${item.count}</span></td>
+                    </tr>
+                `;
+                filesTbody.innerHTML += row;
+            });
+        } else {
+            filesTbody.innerHTML = '<tr><td colspan="3" class="text-center">No files analyzed yet</td></tr>';
+        }
+        
+        // Update deleted files table
+        const deletedFiles = deletedFilesData.deleted_files || [];
+        const deletedFilesTbody = document.getElementById('deleted-files');
+        deletedFilesTbody.innerHTML = '';
+        
+        if (deletedFiles.length > 0) {
+            deletedFiles.slice(0, 10).forEach((item) => {
+                const deletedDate = new Date(item.deleted_at * 1000).toLocaleDateString();
+                const row = `
+                    <tr>
+                        <td class="text-truncate" style="max-width: 150px;" title="${item.filename}">${item.filename}</td>
+                        <td><span class="badge bg-danger">Deleted</span></td>
+                        <td><small class="text-muted">${deletedDate}</small></td>
+                    </tr>
+                `;
+                deletedFilesTbody.innerHTML += row;
+            });
+        } else {
+            deletedFilesTbody.innerHTML = '<tr><td colspan="3" class="text-center">No deleted files</td></tr>';
+        }
+        
+    } catch (error) {
+        console.error('Error fetching analytics:', error);
+    }
+}
+
+// Update data every 5 seconds
+fetchAnalytics();
+setInterval(fetchAnalytics, 5000);
+
+// Mock active users for now
+document.getElementById('active-users').textContent = '1';
+</script>
+{% endblock %}

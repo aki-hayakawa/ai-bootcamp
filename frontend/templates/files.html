@@ -2,12 +2,14 @@
 {% block title %}File Upload (MinIO){% endblock %}
 {% block content %}
 
-  <h2>File Upload (MinIO)</h2>
+  <h2>📁 File Manager</h2>
 
   <form method="post" enctype="multipart/form-data" class="mb-4">
     <div class="input-group">
       <input type="file" name="file" class="form-control">
-      <button type="submit" class="btn btn-primary">Upload</button>
+      <button type="submit" class="btn btn-primary">
+        <i class="bi bi-upload"></i> Upload
+      </button>
     </div>
   </form>
 
@@ -15,11 +17,614 @@
     <div class="alert alert-info">{{ message }}</div>
   {% endif %}
 
-  <h4>Uploaded Files</h4>
-  <ul class="list-group">
-    {% for file in files %}
-      <li class="list-group-item">{{ file }}</li>
-    {% endfor %}
-  </ul>
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h4>Uploaded Files</h4>
+    <button class="btn btn-outline-secondary btn-sm" onclick="refreshFiles()">
+      <i class="bi bi-arrow-clockwise"></i> Refresh
+    </button>
+  </div>
+
+  <div id="files-container">
+    <div class="text-center py-4">
+      <div class="spinner-border" role="status">
+        <span class="visually-hidden">Loading...</span>
+      </div>
+      <p class="mt-2">Loading files...</p>
+    </div>
+  </div>
+
+  <!-- File Preview Modal -->
+  <div class="modal fade" id="filePreviewModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="previewModalTitle">File Preview</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body" id="previewModalBody">
+          <!-- File content will be loaded here -->
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          <a id="downloadLink" class="btn btn-primary" target="_blank">
+            <i class="bi bi-download"></i> Download
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI Question Modal -->
+  <div class="modal fade" id="aiQuestionModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="aiModalTitle">
+            <i class="bi bi-robot me-2"></i>Ask AI about <span id="aiModalFilename"></span>
+          </h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <form id="aiQuestionForm">
+            <div class="row mb-3">
+              <div class="col-md-8">
+                <label for="aiPrompt" class="form-label">Your Question</label>
+                <textarea id="aiPrompt" class="form-control" rows="3" placeholder="What would you like to know about this file?" required></textarea>
+                <div class="form-text">Ask anything about the file's content, structure, or meaning.</div>
+              </div>
+              <div class="col-md-4">
+                <label for="aiModel" class="form-label">AI Model</label>
+                <select id="aiModel" class="form-select" required>
+                  <option value="">Loading models...</option>
+                </select>
+              </div>
+            </div>
+            <div class="d-flex justify-content-between">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+              <button type="submit" class="btn btn-success" id="aiSubmitBtn">
+                <span class="btn-text">Ask AI</span>
+                <span id="aiSpinner" class="spinner-border spinner-border-sm ms-2" role="status" style="display:none;"></span>
+              </button>
+            </div>
+          </form>
+          
+          <!-- AI Response Area -->
+          <div id="aiResponseArea" style="display: none;">
+            <hr>
+            <div class="d-flex align-items-center mb-2">
+              <i class="bi bi-check-circle-fill text-success me-2"></i>
+              <h6 class="mb-0">AI Response (Model: <span id="aiResponseModel"></span>, Source: <span id="aiResponseSource"></span>)</h6>
+            </div>
+            <div class="response-content p-3 rounded" id="aiResponseText"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  
+  <style>
+    /* Modal enhancements */
+    #aiQuestionModal .modal-dialog {
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+    }
+    
+    #aiQuestionModal .modal-header {
+      border-bottom: 2px solid var(--card-border);
+      background-color: var(--card-bg);
+    }
+    
+    #aiQuestionModal .btn-close {
+      font-size: 1.2rem;
+      opacity: 0.8;
+    }
+    
+    #aiQuestionModal .btn-close:hover {
+      opacity: 1;
+      transform: scale(1.1);
+    }
+    
+    .response-content {
+      background-color: var(--card-bg);
+      border: 1px solid var(--card-border);
+      line-height: 1.6;
+      font-size: 0.95rem;
+    }
+    
+    .response-content h1,
+    .response-content h2,
+    .response-content h3,
+    .response-content h4,
+    .response-content h5,
+    .response-content h6 {
+      color: var(--text-color);
+      margin-top: 1.5rem;
+      margin-bottom: 0.75rem;
+    }
+    
+    .response-content h1 { font-size: 1.5rem; }
+    .response-content h2 { font-size: 1.35rem; }
+    .response-content h3 { font-size: 1.2rem; }
+    .response-content h4 { font-size: 1.1rem; }
+    .response-content h5 { font-size: 1.05rem; }
+    .response-content h6 { font-size: 1rem; }
+    
+    .response-content p {
+      margin-bottom: 1rem;
+      color: var(--text-color);
+    }
+    
+    .response-content ul,
+    .response-content ol {
+      margin-bottom: 1rem;
+      padding-left: 1.5rem;
+    }
+    
+    .response-content li {
+      margin-bottom: 0.5rem;
+      color: var(--text-color);
+    }
+    
+    .response-content strong {
+      font-weight: 600;
+      color: var(--text-color);
+    }
+    
+    .response-content em {
+      font-style: italic;
+      color: var(--text-color);
+    }
+    
+    .response-content code {
+      background-color: rgba(128, 128, 128, 0.1);
+      padding: 0.2rem 0.4rem;
+      border-radius: 3px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.9rem;
+      color: var(--text-color);
+    }
+    
+    .response-content pre {
+      background-color: rgba(128, 128, 128, 0.1);
+      padding: 1rem;
+      border-radius: 5px;
+      overflow-x: auto;
+      margin-bottom: 1rem;
+      border: 1px solid var(--card-border);
+    }
+    
+    .response-content pre code {
+      background: none;
+      padding: 0;
+      font-size: 0.9rem;
+    }
+    
+    .response-content blockquote {
+      border-left: 4px solid #007bff;
+      padding-left: 1rem;
+      margin: 1rem 0;
+      font-style: italic;
+      background-color: rgba(0, 123, 255, 0.05);
+      padding: 0.75rem 1rem;
+      border-radius: 0 5px 5px 0;
+    }
+    
+    .response-content table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 1rem;
+    }
+    
+    .response-content th,
+    .response-content td {
+      border: 1px solid var(--card-border);
+      padding: 0.5rem;
+      text-align: left;
+    }
+    
+    .response-content th {
+      background-color: rgba(128, 128, 128, 0.1);
+      font-weight: 600;
+    }
+    
+    /* Dark mode specific overrides */
+    [data-theme="dark"] .response-content {
+      background-color: var(--card-bg);
+      color: var(--text-color);
+    }
+    
+    [data-theme="dark"] .response-content code {
+      background-color: rgba(255, 255, 255, 0.1);
+    }
+    
+    [data-theme="dark"] .response-content pre {
+      background-color: rgba(255, 255, 255, 0.05);
+    }
+    
+    [data-theme="dark"] .response-content blockquote {
+      background-color: rgba(0, 123, 255, 0.1);
+    }
+    
+    [data-theme="dark"] .response-content th {
+      background-color: rgba(255, 255, 255, 0.1);
+    }
+  </style>
+  
+  <script>
+    async function loadFiles() {
+      try {
+        const response = await fetch('/api/files');
+        const files = await response.json();
+        
+        const container = document.getElementById('files-container');
+        
+        if (files.length === 0) {
+          container.innerHTML = `
+            <div class="text-center py-4 text-muted">
+              <i class="bi bi-folder2-open display-4"></i>
+              <p class="mt-2">No files uploaded yet</p>
+            </div>
+          `;
+          return;
+        }
+        
+        const fileRows = files.map(file => {
+          const fileSize = formatFileSize(file.size);
+          const fileType = getFileType(file.name, file.content_type);
+          const fileIcon = getFileIcon(fileType);
+          
+          return `
+            <div class="card mb-2">
+              <div class="card-body">
+                <div class="row align-items-center">
+                  <div class="col-md-6">
+                    <div class="d-flex align-items-center">
+                      <i class="bi ${fileIcon} me-3 fs-4"></i>
+                      <div>
+                        <h6 class="mb-0">${file.name}</h6>
+                        <small class="text-muted">${fileSize} • ${fileType}</small>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="col-md-3">
+                    <small class="text-muted">
+                      ${file.last_modified ? new Date(file.last_modified).toLocaleDateString() : 'Unknown'}
+                    </small>
+                  </div>
+                  <div class="col-md-3 text-end">
+                    <div class="btn-group" role="group">
+                      <button class="btn btn-outline-primary btn-sm" onclick="previewFile('${file.name}', '${fileType}')">
+                        <i class="bi bi-eye"></i> View
+                      </button>
+                      <button class="btn btn-outline-success btn-sm" onclick="askAIAboutFile('${file.name}', '${fileType}')">
+                        <i class="bi bi-robot"></i> Ask AI
+                      </button>
+                      <a href="/api/download/${encodeURIComponent(file.name)}" class="btn btn-outline-secondary btn-sm" target="_blank">
+                        <i class="bi bi-download"></i> Download
+                      </a>
+                      <button class="btn btn-outline-danger btn-sm" onclick="deleteFile('${file.name}')">
+                        <i class="bi bi-trash"></i> Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('');
+        
+        container.innerHTML = fileRows;
+        
+      } catch (error) {
+        console.error('Error loading files:', error);
+        document.getElementById('files-container').innerHTML = `
+          <div class="alert alert-danger">
+            <i class="bi bi-exclamation-triangle"></i>
+            Failed to load files. Please try again.
+          </div>
+        `;
+      }
+    }
+    
+    function formatFileSize(bytes) {
+      if (bytes === 0) return '0 Bytes';
+      const k = 1024;
+      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+    
+    function getFileType(filename, contentType) {
+      if (contentType) {
+        if (contentType.startsWith('image/')) return 'Image';
+        if (contentType.startsWith('video/')) return 'Video';
+        if (contentType.startsWith('audio/')) return 'Audio';
+        if (contentType.includes('pdf')) return 'PDF';
+        if (contentType.startsWith('text/')) return 'Text';
+      }
+      
+      const ext = filename.split('.').pop().toLowerCase();
+      const typeMap = {
+        'jpg': 'Image', 'jpeg': 'Image', 'png': 'Image', 'gif': 'Image', 'svg': 'Image',
+        'mp4': 'Video', 'avi': 'Video', 'mov': 'Video', 'wmv': 'Video',
+        'mp3': 'Audio', 'wav': 'Audio', 'flac': 'Audio',
+        'pdf': 'PDF',
+        'txt': 'Text', 'md': 'Text', 'csv': 'Text',
+        'docx': 'Document', 'doc': 'Document',
+        'xlsx': 'Spreadsheet', 'xls': 'Spreadsheet'
+      };
+      
+      return typeMap[ext] || 'File';
+    }
+    
+    function getFileIcon(fileType) {
+      const iconMap = {
+        'Image': 'bi-file-earmark-image',
+        'Video': 'bi-file-earmark-play',
+        'Audio': 'bi-file-earmark-music',
+        'PDF': 'bi-file-earmark-pdf',
+        'Text': 'bi-file-earmark-text',
+        'Document': 'bi-file-earmark-word',
+        'Spreadsheet': 'bi-file-earmark-excel'
+      };
+      
+      return iconMap[fileType] || 'bi-file-earmark';
+    }
+    
+    async function previewFile(filename, fileType) {
+      const modal = new bootstrap.Modal(document.getElementById('filePreviewModal'));
+      const modalTitle = document.getElementById('previewModalTitle');
+      const modalBody = document.getElementById('previewModalBody');
+      const downloadLink = document.getElementById('downloadLink');
+      
+      modalTitle.textContent = filename;
+      downloadLink.href = `/api/download/${encodeURIComponent(filename)}`;
+      
+      modalBody.innerHTML = '<div class="text-center"><div class="spinner-border" role="status"></div><p class="mt-2">Loading preview...</p></div>';
+      
+      modal.show();
+      
+      try {
+        if (fileType === 'Image') {
+          modalBody.innerHTML = `<img src="/api/view/${encodeURIComponent(filename)}" class="img-fluid" alt="${filename}">`;
+        } else if (fileType === 'Text') {
+          const response = await fetch(`/api/view/${encodeURIComponent(filename)}`);
+          const text = await response.text();
+          modalBody.innerHTML = `<pre class="bg-light p-3 rounded" style="max-height: 400px; overflow-y: auto;">${text}</pre>`;
+        } else if (fileType === 'PDF') {
+          modalBody.innerHTML = `<embed src="/api/view/${encodeURIComponent(filename)}" type="application/pdf" width="100%" height="500px">`;
+        } else if (fileType === 'Video') {
+          modalBody.innerHTML = `<video controls class="w-100"><source src="/api/view/${encodeURIComponent(filename)}"></video>`;
+        } else if (fileType === 'Audio') {
+          modalBody.innerHTML = `<audio controls class="w-100"><source src="/api/view/${encodeURIComponent(filename)}"></audio>`;
+        } else {
+          modalBody.innerHTML = `
+            <div class="text-center py-4">
+              <i class="bi bi-file-earmark display-1 text-muted"></i>
+              <p class="mt-2">Preview not available for this file type.</p>
+              <p class="text-muted">Use the download button to view the file.</p>
+            </div>
+          `;
+        }
+      } catch (error) {
+        modalBody.innerHTML = `
+          <div class="alert alert-danger">
+            <i class="bi bi-exclamation-triangle"></i>
+            Failed to load file preview.
+          </div>
+        `;
+      }
+    }
+    
+    function refreshFiles() {
+      loadFiles();
+    }
+    
+    // Delete file functionality
+    async function deleteFile(filename) {
+      // Show confirmation dialog
+      const confirmed = confirm(`Are you sure you want to delete "${filename}"?\n\nThis action cannot be undone.`);
+      
+      if (!confirmed) {
+        return;
+      }
+      
+      try {
+        const response = await fetch(`/api/delete-file/${encodeURIComponent(filename)}`, {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+          // Show success message
+          showNotification(`File "${filename}" deleted successfully`, 'success');
+          
+          // Refresh the file list
+          loadFiles();
+        } else {
+          showNotification(`Failed to delete file: ${data.error || data.detail || 'Unknown error'}`, 'error');
+        }
+        
+      } catch (error) {
+        console.error('Delete file error:', error);
+        showNotification(`Error deleting file: ${error.message}`, 'error');
+      }
+    }
+    
+    // Show notification function
+    function showNotification(message, type = 'info') {
+      // Create notification element
+      const notification = document.createElement('div');
+      notification.className = `alert alert-${type === 'success' ? 'success' : type === 'error' ? 'danger' : 'info'} alert-dismissible fade show position-fixed`;
+      notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+      notification.innerHTML = `
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+      `;
+      
+      // Add to page
+      document.body.appendChild(notification);
+      
+      // Auto remove after 5 seconds
+      setTimeout(() => {
+        if (notification.parentNode) {
+          notification.remove();
+        }
+      }, 5000);
+    }
+    
+    // AI functionality
+    let currentFilename = '';
+    
+    async function askAIAboutFile(filename, fileType) {
+      currentFilename = filename;
+      const modal = new bootstrap.Modal(document.getElementById('aiQuestionModal'), {
+        backdrop: 'static',
+        keyboard: false
+      });
+      
+      // Set filename in modal
+      document.getElementById('aiModalFilename').textContent = filename;
+      
+      // Load models if not already loaded
+      await loadAIModels();
+      
+      // Clear previous content
+      document.getElementById('aiPrompt').value = '';
+      document.getElementById('aiResponseArea').style.display = 'none';
+      
+      // Set placeholder based on file type
+      const placeholder = getPlaceholderForFileType(fileType, filename);
+      document.getElementById('aiPrompt').placeholder = placeholder;
+      
+      modal.show();
+    }
+    
+    async function loadAIModels() {
+      try {
+        const response = await fetch('/api/models');
+        const data = await response.json();
+        
+        const select = document.getElementById('aiModel');
+        select.innerHTML = '';
+        
+        data.models.forEach(model => {
+          const option = document.createElement('option');
+          option.value = model;
+          option.textContent = model;
+          if (model === data.default) {
+            option.selected = true;
+          }
+          select.appendChild(option);
+        });
+      } catch (error) {
+        console.error('Failed to load models:', error);
+        document.getElementById('aiModel').innerHTML = '<option value="gemini-2.5-pro">gemini-2.5-pro (fallback)</option>';
+      }
+    }
+    
+    function getPlaceholderForFileType(fileType, filename) {
+      switch (fileType) {
+        case 'Image':
+          return 'What do you see in this image? Describe the content, objects, or analyze the visual elements.';
+        case 'Text':
+          return 'Summarize this document, explain its content, or ask about specific parts.';
+        case 'PDF':
+          return 'What is this document about? Summarize the main points or analyze the content.';
+        case 'Video':
+          return 'Describe this video file, its format, or ask about video-related analysis.';
+        case 'Audio':
+          return 'Tell me about this audio file, its format, or audio-related properties.';
+        default:
+          return `What can you tell me about this ${fileType.toLowerCase()} file named ${filename}?`;
+      }
+    }
+    
+    // Handle AI form submission
+    document.getElementById('aiQuestionForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      
+      const prompt = document.getElementById('aiPrompt').value.trim();
+      const model = document.getElementById('aiModel').value;
+      const submitBtn = document.getElementById('aiSubmitBtn');
+      const spinner = document.getElementById('aiSpinner');
+      
+      if (!prompt || !model) {
+        alert('Please enter a question and select a model.');
+        return;
+      }
+      
+      // UI feedback
+      submitBtn.disabled = true;
+      spinner.style.display = 'inline-block';
+      submitBtn.querySelector('.btn-text').textContent = 'Asking AI...';
+      
+      // Hide previous response
+      document.getElementById('aiResponseArea').style.display = 'none';
+      
+      try {
+        const response = await fetch('/api/ask-ai-about-file', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            filename: currentFilename,
+            prompt: prompt,
+            model: model
+          })
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+          throw new Error(data.detail || `HTTP ${response.status}`);
+        }
+        
+        // Show response with markdown formatting
+        document.getElementById('aiResponseModel').textContent = data.model;
+        document.getElementById('aiResponseSource').textContent = data.source;
+        
+        // Parse and render markdown
+        const responseElement = document.getElementById('aiResponseText');
+        try {
+          // Configure marked options for better formatting
+          marked.setOptions({
+            breaks: true,
+            gfm: true,
+            headerIds: false,
+            mangle: false
+          });
+          responseElement.innerHTML = marked.parse(data.response);
+        } catch (error) {
+          console.error('Markdown parsing failed, falling back to plain text:', error);
+          responseElement.textContent = data.response;
+        }
+        
+        document.getElementById('aiResponseArea').style.display = 'block';
+        
+        // Scroll to response
+        document.getElementById('aiResponseArea').scrollIntoView({ behavior: 'smooth' });
+        
+      } catch (error) {
+        alert('Error: ' + error.message);
+        console.error('AI request failed:', error);
+      } finally {
+        // Restore button
+        submitBtn.disabled = false;
+        spinner.style.display = 'none';
+        submitBtn.querySelector('.btn-text').textContent = 'Ask AI';
+      }
+    });
+    
+    // Load files when page loads
+    document.addEventListener('DOMContentLoaded', loadFiles);
+  </script>
 
 {% endblock %}

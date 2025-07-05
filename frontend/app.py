@@ -126,7 +126,14 @@ def logout():
 @app.route("/")
 @login_required
 def index():
-    return render_template("index.html")
+    # Redirect home page to analytics dashboard
+    return redirect(url_for("analytics"))
+
+@app.route("/dashboard")
+@login_required  
+def dashboard():
+    # Alias for analytics
+    return redirect(url_for("analytics"))
 
 @app.route("/ask-llm", methods=["GET", "POST"])
 @login_required
@@ -194,6 +201,190 @@ def file_manager():
         files = res.json() if isinstance(res.json(), list) else []
 
     return render_template("files.html", message=message, files=files)
+
+@app.route("/api/files")
+@login_required
+def api_files():
+    token = session["access_token"]
+    try:
+        res = requests.get(
+            f"{BACKEND_URL}/list-files",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        return res.json() if res.ok else []
+    except Exception as e:
+        return []
+
+@app.route("/api/download/<filename>")
+@login_required
+def api_download_file(filename):
+    token = session["access_token"]
+    try:
+        res = requests.get(
+            f"{BACKEND_URL}/download-file/{filename}",
+            headers={"Authorization": f"Bearer {token}"},
+            stream=True
+        )
+        if res.ok:
+            from flask import Response
+            return Response(
+                res.iter_content(chunk_size=8192),
+                content_type=res.headers.get('content-type', 'application/octet-stream'),
+                headers={
+                    'Content-Disposition': res.headers.get('Content-Disposition', f'attachment; filename={filename}'),
+                    'Content-Length': res.headers.get('Content-Length')
+                }
+            )
+        else:
+            return "File not found", 404
+    except Exception as e:
+        return "Error downloading file", 500
+
+@app.route("/api/view/<filename>")
+@login_required
+def api_view_file(filename):
+    token = session["access_token"]
+    try:
+        res = requests.get(
+            f"{BACKEND_URL}/view-file/{filename}",
+            headers={"Authorization": f"Bearer {token}"},
+            stream=True
+        )
+        if res.ok:
+            from flask import Response
+            return Response(
+                res.iter_content(chunk_size=8192),
+                content_type=res.headers.get('content-type', 'application/octet-stream'),
+                headers={
+                    'Content-Length': res.headers.get('Content-Length')
+                }
+            )
+        else:
+            return "File not found", 404
+    except Exception as e:
+        return "Error viewing file", 500
+
+@app.route("/analytics")
+@login_required
+def analytics():
+    return render_template("analytics.html")
+
+@app.route("/api/analytics/summary")
+@login_required
+def analytics_summary():
+    token = session["access_token"]
+    try:
+        res = requests.get(
+            f"{BACKEND_URL}/analytics/summary",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        return res.json() if res.ok else {"error": "Failed to fetch analytics"}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.route("/api/analytics/top-prompts")
+@login_required
+def analytics_top_prompts():
+    token = session["access_token"]
+    try:
+        res = requests.get(
+            f"{BACKEND_URL}/analytics/top-prompts",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        return res.json() if res.ok else []
+    except Exception as e:
+        return []
+
+@app.route("/api/analytics/files")
+@login_required
+def analytics_files():
+    token = session["access_token"]
+    try:
+        res = requests.get(
+            f"{BACKEND_URL}/analytics/files",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        return res.json() if res.ok else {"total_files": 0, "total_size": 0, "by_type": {}}
+    except Exception as e:
+        return {"total_files": 0, "total_size": 0, "by_type": {}}
+
+@app.route("/api/models")
+@login_required
+def get_models():
+    try:
+        res = requests.get(f"{BACKEND_URL}/models")
+        return res.json() if res.ok else {"models": ["gemini-2.5-pro"], "default": "gemini-2.5-pro"}
+    except Exception as e:
+        return {"models": ["gemini-2.5-pro"], "default": "gemini-2.5-pro"}
+
+@app.route("/api/delete-file/<filename>", methods=["DELETE"])
+@login_required
+def api_delete_file(filename):
+    token = session["access_token"]
+    try:
+        res = requests.delete(
+            f"{BACKEND_URL}/delete-file/{filename}",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        
+        if res.ok:
+            return res.json()
+        else:
+            error_data = res.json() if res.headers.get('content-type', '').startswith('application/json') else {}
+            return {"error": error_data.get('detail', f'HTTP {res.status_code}')}, res.status_code
+            
+    except Exception as e:
+        return {"error": f"Failed to delete file: {str(e)}"}, 500
+
+@app.route("/api/ask-ai-about-file", methods=["POST"])
+@login_required
+def ask_ai_about_file():
+    token = session["access_token"]
+    try:
+        # Get the JSON data from the request
+        data = request.get_json()
+        
+        # Forward the request to the backend
+        res = requests.post(
+            f"{BACKEND_URL}/ask-ai-about-file",
+            json=data,
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        
+        if res.ok:
+            return res.json()
+        else:
+            error_data = res.json() if res.headers.get('content-type', '').startswith('application/json') else {}
+            return {"error": error_data.get('detail', f'HTTP {res.status_code}')}, res.status_code
+            
+    except Exception as e:
+        return {"error": f"Failed to process AI request: {str(e)}"}, 500
+
+@app.route("/api/analytics/file-ai")
+@login_required
+def analytics_file_ai():
+    token = session["access_token"]
+    try:
+        res = requests.get(
+            f"{BACKEND_URL}/analytics/file-ai",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        return res.json() if res.ok else {"total_requests": 0, "by_type": {}, "by_model": {}, "top_files": []}
+    except Exception as e:
+        return {"total_requests": 0, "by_type": {}, "by_model": {}, "top_files": []}
+
+@app.route("/api/analytics/deleted-files")
+@login_required
+def analytics_deleted_files():
+    token = session["access_token"]
+    try:
+        res = requests.get(
+            f"{BACKEND_URL}/analytics/deleted-files",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        return res.json() if res.ok else {"deleted_files": [], "total_deleted": 0}
+    except Exception as e:
+        return {"deleted_files": [], "total_deleted": 0}
 
 if __name__ == "__main__":
     app.run(debug=True)

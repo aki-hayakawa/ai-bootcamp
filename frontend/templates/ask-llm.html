@@ -5,12 +5,25 @@
   <h2>Ask the LLM</h2>
 
   <form id="llmForm" class="mb-4">
-    <div class="mb-3">
-      <label for="prompt" class="form-label">Prompt</label>
-      <textarea id="prompt" name="prompt" class="form-control" rows="4" required></textarea>
+    <div class="row">
+      <div class="col-md-8">
+        <div class="mb-3">
+          <label for="prompt" class="form-label">Prompt</label>
+          <textarea id="prompt" name="prompt" class="form-control" rows="4" required></textarea>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="mb-3">
+          <label for="model" class="form-label">AI Model</label>
+          <select id="model" name="model" class="form-select" required>
+            <option value="">Loading models...</option>
+          </select>
+          <div class="form-text">Choose which AI model to use for your request.</div>
+        </div>
+      </div>
     </div>
     <button type="submit" class="btn btn-primary" id="submitBtn">
-      Submit
+      <span class="btn-text">Submit</span>
       <span 
         id="spinner" 
         class="spinner-border spinner-border-sm ms-2" 
@@ -23,15 +36,32 @@
 
   <hr>
 
+  <!-- Error Alert -->
+  <div id="error-alert" class="alert alert-danger alert-dismissible fade" role="alert" style="display: none;">
+    <div class="d-flex align-items-center">
+      <i class="bi bi-exclamation-triangle-fill me-2"></i>
+      <div>
+        <strong>Error:</strong> <span id="error-message"></span>
+      </div>
+    </div>
+    <button type="button" class="btn-close" onclick="hideError()"></button>
+  </div>
+
+  <!-- Success Response -->
   <div 
     id="response-container" 
     class="fade" 
     style="display: none; opacity: 0;"
   >
-    <h4>Response (<span id="source"></span>)</h4>
-    <pre class="bg-light p-3 border rounded" id="responseText"></pre>
+    <div class="d-flex align-items-center mb-2">
+      <i class="bi bi-check-circle-fill text-success me-2"></i>
+      <h4 class="mb-0">Response (Model: <span id="modelUsed"></span>, Source: <span id="source"></span>)</h4>
+    </div>
+    <div class="response-content p-3 border rounded" id="responseText"></div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  
   <script>
     const token = "{{ session.access_token }}";
     const form = document.getElementById("llmForm");
@@ -40,21 +70,100 @@
     const respCont = document.getElementById("response-container");
     const respText = document.getElementById("responseText");
     const srcSpan  = document.getElementById("source");
+    const modelSpan = document.getElementById("modelUsed");
+    const modelSelect = document.getElementById("model");
+    const errorAlert = document.getElementById("error-alert");
+    const errorMessage = document.getElementById("error-message");
+
+    // Load available models on page load
+    async function loadModels() {
+      try {
+        const res = await fetch("/api/models");
+        const data = await res.json();
+        
+        modelSelect.innerHTML = "";
+        data.models.forEach(model => {
+          const option = document.createElement("option");
+          option.value = model;
+          option.textContent = model;
+          if (model === data.default) {
+            option.selected = true;
+          }
+          modelSelect.appendChild(option);
+        });
+      } catch (err) {
+        console.error("Failed to load models:", err);
+        modelSelect.innerHTML = '<option value="gemini-2.5-pro">gemini-2.5-pro (fallback)</option>';
+      }
+    }
+
+    // Hide error alert
+    function hideError() {
+      errorAlert.classList.remove("show");
+      setTimeout(() => {
+        errorAlert.style.display = "none";
+      }, 300);
+    }
+
+    // Show error alert with message
+    function showError(message) {
+      errorMessage.textContent = message;
+      errorAlert.style.display = "block";
+      void errorAlert.offsetWidth; // force reflow
+      errorAlert.classList.add("show");
+    }
+
+    // Parse and format error messages
+    function formatError(errorText) {
+      // Handle Gemini API errors
+      if (errorText.includes("503 UNAVAILABLE")) {
+        return "The selected AI model is currently overloaded. Please try again in a few moments or select a different model.";
+      }
+      if (errorText.includes("429")) {
+        return "Rate limit exceeded. Please wait a moment before trying again.";
+      }
+      if (errorText.includes("401")) {
+        return "Authentication failed. Please refresh the page and try again.";
+      }
+      if (errorText.includes("400")) {
+        return "Invalid request. Please check your input and try again.";
+      }
+      if (errorText.includes("500")) {
+        return "Server error occurred. Please try again later.";
+      }
+      
+      // For other errors, return the original message but cleaner
+      return errorText.replace(/^Error:\s*/, '').replace(/Gemini Error:\s*/, '');
+    }
+
+    // Load models when page loads
+    loadModels();
 
     form.addEventListener("submit", async function(e) {
       e.preventDefault();
 
       // grab & validate
-      const prompt = (new FormData(form).get("prompt")||"").trim();
+      const formData = new FormData(form);
+      const prompt = (formData.get("prompt")||"").trim();
+      const model = formData.get("model");
+      
       if (!prompt) {
-        alert("Please enter a prompt.");
+        showError("Please enter a prompt before submitting.");
+        return;
+      }
+      
+      if (!model) {
+        showError("Please select an AI model before submitting.");
         return;
       }
 
       // prepare UI
       btn.disabled = true;
       spinner.style.display = "inline-block";
-      // hide previous response
+      btn.querySelector('.btn-text').textContent = "Generating...";
+      
+      // hide previous response and errors
+      hideError();
       respCont.classList.remove("show");
       respCont.style.display = "none";
 
@@ -67,7 +176,7 @@
             "Accept": "application/json",
             "Authorization": `Bearer ${token}`
           },
-          body: JSON.stringify({ prompt })
+          body: JSON.stringify({ prompt, model })
         });
 
         const data = await res.json().catch(()=>null);
@@ -75,23 +184,42 @@
           throw new Error(data?.detail || `HTTP ${res.status}`);
         }
 
-        // fill response
-        respText.innerText = data.response;
-        srcSpan.innerText  = data.source;
+        // fill response with markdown formatting
+        srcSpan.innerText = data.source;
+        modelSpan.innerText = data.model;
+        
+        // Parse and render markdown
+        try {
+          // Configure marked options for better formatting
+          marked.setOptions({
+            breaks: true,
+            gfm: true,
+            headerIds: false,
+            mangle: false
+          });
+          respText.innerHTML = marked.parse(data.response);
+        } catch (error) {
+          console.error('Markdown parsing failed, falling back to plain text:', error);
+          respText.innerText = data.response;
+        }
 
         // fade-in
         respCont.style.display = "block";
-        // force reflow so transition triggers
         void respCont.offsetWidth;
         respCont.classList.add("show");
 
+        // Scroll to response
+        respCont.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
       } catch (err) {
-        alert("Error: " + err.message);
-        console.error(err);
+        const formattedError = formatError(err.message);
+        showError(formattedError);
+        console.error("Full error:", err);
       } finally {
         // restore button
         btn.disabled = false;
         spinner.style.display = "none";
+        btn.querySelector('.btn-text').textContent = "Submit";
       }
     });
   </script>
@@ -103,6 +231,131 @@
     }
     .fade.show {
       opacity: 1 !important;
+    }
+    
+    .response-content {
+      background-color: var(--card-bg);
+      border: 1px solid var(--card-border);
+      line-height: 1.6;
+      font-size: 0.95rem;
+    }
+    
+    .response-content h1,
+    .response-content h2,
+    .response-content h3,
+    .response-content h4,
+    .response-content h5,
+    .response-content h6 {
+      color: var(--text-color);
+      margin-top: 1.5rem;
+      margin-bottom: 0.75rem;
+    }
+    
+    .response-content h1 { font-size: 1.5rem; }
+    .response-content h2 { font-size: 1.35rem; }
+    .response-content h3 { font-size: 1.2rem; }
+    .response-content h4 { font-size: 1.1rem; }
+    .response-content h5 { font-size: 1.05rem; }
+    .response-content h6 { font-size: 1rem; }
+    
+    .response-content p {
+      margin-bottom: 1rem;
+      color: var(--text-color);
+    }
+    
+    .response-content ul,
+    .response-content ol {
+      margin-bottom: 1rem;
+      padding-left: 1.5rem;
+    }
+    
+    .response-content li {
+      margin-bottom: 0.5rem;
+      color: var(--text-color);
+    }
+    
+    .response-content strong {
+      font-weight: 600;
+      color: var(--text-color);
+    }
+    
+    .response-content em {
+      font-style: italic;
+      color: var(--text-color);
+    }
+    
+    .response-content code {
+      background-color: rgba(128, 128, 128, 0.1);
+      padding: 0.2rem 0.4rem;
+      border-radius: 3px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.9rem;
+      color: var(--text-color);
+    }
+    
+    .response-content pre {
+      background-color: rgba(128, 128, 128, 0.1);
+      padding: 1rem;
+      border-radius: 5px;
+      overflow-x: auto;
+      margin-bottom: 1rem;
+      border: 1px solid var(--card-border);
+    }
+    
+    .response-content pre code {
+      background: none;
+      padding: 0;
+      font-size: 0.9rem;
+    }
+    
+    .response-content blockquote {
+      border-left: 4px solid #007bff;
+      padding-left: 1rem;
+      margin: 1rem 0;
+      font-style: italic;
+      background-color: rgba(0, 123, 255, 0.05);
+      padding: 0.75rem 1rem;
+      border-radius: 0 5px 5px 0;
+    }
+    
+    .response-content table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 1rem;
+    }
+    
+    .response-content th,
+    .response-content td {
+      border: 1px solid var(--card-border);
+      padding: 0.5rem;
+      text-align: left;
+    }
+    
+    .response-content th {
+      background-color: rgba(128, 128, 128, 0.1);
+      font-weight: 600;
+    }
+    
+    /* Dark mode specific overrides */
+    [data-theme="dark"] .response-content {
+      background-color: var(--card-bg);
+      color: var(--text-color);
+    }
+    
+    [data-theme="dark"] .response-content code {
+      background-color: rgba(255, 255, 255, 0.1);
+    }
+    
+    [data-theme="dark"] .response-content pre {
+      background-color: rgba(255, 255, 255, 0.05);
+    }
+    
+    [data-theme="dark"] .response-content blockquote {
+      background-color: rgba(0, 123, 255, 0.1);
+    }
+    
+    [data-theme="dark"] .response-content th {
+      background-color: rgba(255, 255, 255, 0.1);
     }
   </style>
 {% endblock %}
