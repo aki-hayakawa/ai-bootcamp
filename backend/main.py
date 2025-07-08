@@ -2,8 +2,6 @@ import os
 import json
 import datetime
 from io import BytesIO
-
-
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Request
 from fastapi.security import OAuth2PasswordBearer
 import httpx
@@ -15,7 +13,6 @@ from minio import Minio
 from sqlalchemy import insert, create_engine
 from databases import Database
 from dotenv import load_dotenv
-
 from sqlalchemy.exc import OperationalError
 import time
 
