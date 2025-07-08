@@ -48,6 +48,8 @@ services:
     image: redis:alpine
     container_name: redis
     restart: always
+    volumes:
+      - redis_data:/data
 
   keycloak:
     image: quay.io/keycloak/keycloak:24.0.1
@@ -132,3 +134,4 @@ volumes:
   pgdata:
   keycloak_data:
   minio_data:
+  redis_data:
