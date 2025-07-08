@@ -71,8 +71,6 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl=OAUTH2_TOKEN_URL)
 minio_client: Minio
 jwks = None  # will hold Keycloak’s signing keys
 
-
-
 # after your other imports & load_dotenv…
 redis_client = redis.from_url(os.getenv("REDIS_URL"), decode_responses=True)
 
