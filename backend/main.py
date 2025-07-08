@@ -58,7 +58,6 @@ MINIO_BUCKET             = os.getenv("MINIO_BUCKET", "uploads")
 # ─── Clients initialization ───────────────────────────────────────────────────
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-
 # RabbitMQ connection will be established in startup
 rabbitmq_connection = None
 rabbitmq_channel = None
